@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -12,6 +13,7 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 		if err != nil {
 			return err
 		}
+		fmt.Printf("%s\n", msg)
 		err = ch.PublishWithContext(context.Background(),exchange, key, false, false, amqp.Publishing{
 			ContentType: "application/json",
 			Body: 		 msg,
@@ -69,5 +71,38 @@ func DeclareAndBind(
 		return nil, amqp.Queue{}, err
 	}
 	return ch, queue, nil
+
+}
+
+
+func SubscribeJSON[T any](conn *amqp.Connection, exchange, queuName, key string, queueType SimpleQueueType,	handler func(T)) error {
+		ch, queue, err := DeclareAndBind(conn, exchange, queuName, key, queueType)
+		if err != nil {
+			return err
+		}
+		c, err := ch.Consume(queue.Name, "", false, false, false, false, nil)
+		if err != nil {
+			return err
+		}
+
+		go func(){
+			for d := range c {
+				var data T
+				err := json.Unmarshal(d.Body, &data)
+				if err != nil {
+					fmt.Printf("error while processing the msg: %s\n", err.Error())
+				}
+				fmt.Printf("msg body:%s\n",string(d.Body))
+				handler(data)
+				err = d.Ack(false)
+				if err != nil {
+					fmt.Printf("error while ackising the msg %s\n", err.Error())
+				}
+			}
+		}()
+		return nil 
+		
+		
+
 
 }

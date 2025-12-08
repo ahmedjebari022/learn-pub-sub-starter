@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -25,33 +24,29 @@ func main() {
 		log.Fatal("Error creating the connection channel")
 	}
 	defer ch.Close()
-
+	_, _, err = pubsub.DeclareAndBind(conn, "peril_topic", "game_logs", "game_logs.*",pubsub.Durable)
+	if err != nil {
+		log.Fatal(err.Error())
+	} 
 
 	gamelogic.PrintServerHelp()
 	loop:
 	for {
-		var msg []byte
 		input := gamelogic.GetInput()
 		if len(input) == 0{
 			continue
 		}
+		ps := routing.PlayingState{}
 		switch input[0]{
 		case "pause":
-			ps := routing.PlayingState{
+			ps = routing.PlayingState{
 				IsPaused: true,
 			} 
-			msg, err = json.Marshal(ps)
-			if err != nil {
-				log.Fatal(err.Error())
-			}
+			fmt.Printf("ps:%v\n",ps)
 			fmt.Println("Pausing the game")
 		case "resume":
-			rs := routing.PlayingState{
+			ps = routing.PlayingState{
 				IsPaused: false,
-			}
-			msg, err = json.Marshal(rs)
-			if err != nil {
-				log.Fatal(err.Error())
 			}
 			fmt.Println("Resuming the game")
 		case "quit":
@@ -60,7 +55,7 @@ func main() {
 		default:
 			fmt.Println("Unknown Command")
 		}
-		err = pubsub.PublishJSON(ch, routing.ExchangePerilDirect, routing.PauseKey, msg)
+		err = pubsub.PublishJSON(ch, routing.ExchangePerilDirect, routing.PauseKey, ps)
 		if err != nil {
 			log.Fatal("Error sending the Pausing message")
 		}
