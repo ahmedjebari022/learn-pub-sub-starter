@@ -60,7 +60,9 @@ func DeclareAndBind(
 	durable := queueType == Durable
 	autoDelete := queueType == Transient
 	
-	queue, err := ch.QueueDeclare(queueName, durable, autoDelete, exclusive, false, nil)	
+	queue, err := ch.QueueDeclare(queueName, durable, autoDelete, exclusive, false, amqp.Table{
+		"x-dead-letter-exchange": "peril_dlx",
+	})	
 	if err != nil {
 		ch.Close()
 		return nil, amqp.Queue{}, err
@@ -74,8 +76,23 @@ func DeclareAndBind(
 
 }
 
+type Acktype int
+const (
+	Ack = iota
+	NackRequeue
+	NackDiscard
+)
 
-func SubscribeJSON[T any](conn *amqp.Connection, exchange, queuName, key string, queueType SimpleQueueType,	handler func(T)) error {
+func (a Acktype) String() string{
+	vals := map[Acktype]string{
+		0:"Ack",
+		1:"NackRequeue",
+		2:"NackDiscard",
+	}
+	return vals[a]
+}
+
+func SubscribeJSON[T any](conn *amqp.Connection, exchange, queuName, key string, queueType SimpleQueueType,	handler func(T) Acktype ) error {
 		ch, queue, err := DeclareAndBind(conn, exchange, queuName, key, queueType)
 		if err != nil {
 			return err
@@ -92,11 +109,26 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queuName, key string,
 				if err != nil {
 					fmt.Printf("error while processing the msg: %s\n", err.Error())
 				}
-				fmt.Printf("msg body:%s\n",string(d.Body))
-				handler(data)
-				err = d.Ack(false)
-				if err != nil {
-					fmt.Printf("error while ackising the msg %s\n", err.Error())
+				ack := handler(data)
+				switch ack.String() {
+				case "Ack" :
+					err = d.Ack(false)
+					fmt.Printf("Ack")
+					if err != nil {
+						fmt.Printf("error while ackising the msg %s\n", err.Error())
+					}
+				case "NackRequeue":
+					fmt.Printf("NackRequeue")
+					err = d.Nack(false, true)
+					if err != nil {
+						fmt.Printf("error while ackising the smg %s\n", err.Error())
+					}
+				case "NackDiscard":
+					fmt.Printf("NackDiscard")
+					err = d.Nack(false, false)
+					if err != nil {
+						fmt.Printf("error while ackising the msg%s\n", err.Error())
+					}
 				}
 			}
 		}()

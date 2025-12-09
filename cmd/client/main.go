@@ -121,8 +121,10 @@ func main() {
 	)
 	
 	//binding to moving queu
-	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "army_moves."+userName, "army_moves.*", pubsub.Transient, handlerMove(gs))
+	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "army_moves."+userName, "army_moves.*", pubsub.Transient, handlerMove(gs, ch))
 	pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, "pause."+gs.GetUsername(), routing.PauseKey, pubsub.Transient, handlerPause(gs))
+	//binding to war uqueu
+	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "war", routing.WarRecognitionsPrefix+"."+gs.GetUsername(), pubsub.Durable, handlerWar(gs))
 	gamelogic.PrintClientHelp()
 	loop:
 	for {
@@ -168,21 +170,59 @@ func main() {
 	
 }
 
-func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState){
-	return func(ps routing.PlayingState){
+func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.Acktype{
+	return func(ps routing.PlayingState) pubsub.Acktype {
 		defer fmt.Println("> ")
 		fmt.Printf("%v\n",ps)
 		gs.HandlePause(ps)
+		return pubsub.Ack
 	}
 }
 
 
-func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove){
-	return func(mv gamelogic.ArmyMove){
+func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyMove) pubsub.Acktype{
+	return func(mv gamelogic.ArmyMove) pubsub.Acktype{
 		defer fmt.Println("> ")
 		fmt.Println("e")
-		gs.HandleMove(mv)
+		mo := gs.HandleMove(mv)
+		switch mo{
+		case 0:
+			return pubsub.NackDiscard
+		case 1:
+			return pubsub.Ack
+		case 2:
+			rw := gamelogic.RecognitionOfWar{
+				Attacker: mv.Player,
+				Defender: gs.Player,
+			}
+			err := pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix +"."+gs.GetUsername(),rw )
+			if err != nil {
+				return pubsub.NackRequeue
+			}
+			return pubsub.Ack
+		}
+		return pubsub.NackDiscard
 	}
+}
 
 
+func handlerWar(gs *gamelogic.GameState) func( gamelogic.RecognitionOfWar) pubsub.Acktype{
+	return func(rw gamelogic.RecognitionOfWar) pubsub.Acktype{
+		defer fmt.Print("> ")
+		o, _, _ := gs.HandleWar(rw)
+		switch o {
+		case 0: 
+			return pubsub.NackRequeue
+		case 1:
+			return pubsub.NackDiscard
+		case 2:
+			return pubsub.Ack
+		case 3:
+			return pubsub.Ack
+		case 4:
+			return pubsub.Ack
+		}
+		fmt.Printf("error while handling war")
+		return pubsub.NackDiscard
+	}
 }
