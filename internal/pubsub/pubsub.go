@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -133,8 +135,85 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queuName, key string,
 			}
 		}()
 		return nil 
-		
-		
-
-
 }
+
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+
+	
+	var msg bytes.Buffer
+	encoder := gob.NewEncoder(&msg)
+	err := encoder.Encode(val)
+	if err != nil {
+		fmt.Println("error while encoding")
+		return err
+	}
+
+	err = ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
+		ContentType: "application/gob",
+		Body: msg.Bytes(),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("sent message to exchange%s\n",exchange)
+	return nil 
+}
+
+
+
+func SubscribeGob[T any](conn *amqp.Connection, exchange, queueName, key string, simpleQSimpleQueueType SimpleQueueType, handler func(T) Acktype, unmarshaller func([]byte) (T, error)) error{
+	ch, _, err := DeclareAndBind(conn, exchange, queueName, key, Durable)
+	if err != nil {
+		return err
+	}
+	err = ch.Qos(10,0,true)
+	if err != nil {
+		return err
+	}
+	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+	go func(){
+		for d := range deliveries {
+			msg, err := unmarshaller(d.Body)	
+			if err != nil {
+				fmt.Printf("error while decoding the msg: %s\n",err.Error())
+			}
+			ackType := handler(msg)
+			switch ackType.String() {
+			case "Ack" :
+				err = d.Ack(false)
+				fmt.Printf("Ack")
+				if err != nil {
+					fmt.Printf("error while ackising the msg %s\n", err.Error())
+				}
+			case "NackRequeue":
+				fmt.Printf("NackRequeue")
+				err = d.Nack(false, true)
+				if err != nil {
+					fmt.Printf("error while ackising the smg %s\n", err.Error())
+				}
+			case "NackDiscard":
+				fmt.Printf("NackDiscard")
+				err = d.Nack(false, false)
+				if err != nil {
+					fmt.Printf("error while ackising the msg%s\n", err.Error())
+				}
+			}
+		}
+	}()
+		return nil
+}
+
+
+func GobDecoder[T any](data []byte) (T, error) {
+	var t T
+	decoder := gob.NewDecoder(bytes.NewBuffer(data))
+	err := decoder.Decode(&t)
+	if err != nil {
+		return t, err
+	}
+	return t, nil
+} 

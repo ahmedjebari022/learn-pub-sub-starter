@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"time"
+
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
@@ -124,7 +127,7 @@ func main() {
 	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "army_moves."+userName, "army_moves.*", pubsub.Transient, handlerMove(gs, ch))
 	pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, "pause."+gs.GetUsername(), routing.PauseKey, pubsub.Transient, handlerPause(gs))
 	//binding to war uqueu
-	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "war", routing.WarRecognitionsPrefix+"."+gs.GetUsername(), pubsub.Durable, handlerWar(gs))
+	pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "war", routing.WarRecognitionsPrefix+"."+gs.GetUsername(), pubsub.Durable, handlerWar(gs, ch))
 	gamelogic.PrintClientHelp()
 	loop:
 	for {
@@ -159,7 +162,27 @@ func main() {
 		case "help":
 			gamelogic.PrintClientHelp()
 		case "spam":
-			fmt.Println("Spamming not allowed yet!")
+			if len(input) < 2 {
+				fmt.Println("missing second argument")
+				continue
+			}
+			n, err := strconv.Atoi(input[1])
+			if err != nil {
+				fmt.Println("error converting to number")
+			}
+			for i := 0; i < n; i++ {
+				ml := gamelogic.GetMaliciousLog()
+				log := routing.GameLog{
+					CurrentTime: time.Now(),
+					Message: ml,
+					Username: gs.GetUsername(),
+				}
+				err = pubsub.PublishGob(ch, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gs.GetUsername(), log)
+				if err != nil {
+					fmt.Println("error converting to number")
+					continue
+				}
+			}
 		case "quit":
 			gamelogic.PrintQuit()
 			break loop
@@ -206,23 +229,58 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyM
 }
 
 
-func handlerWar(gs *gamelogic.GameState) func( gamelogic.RecognitionOfWar) pubsub.Acktype{
+func handlerWar(gs *gamelogic.GameState, ch *amqp.Channel) func( gamelogic.RecognitionOfWar) pubsub.Acktype{
 	return func(rw gamelogic.RecognitionOfWar) pubsub.Acktype{
 		defer fmt.Print("> ")
-		o, _, _ := gs.HandleWar(rw)
+		o, w, l := gs.HandleWar(rw)
 		switch o {
 		case 0: 
 			return pubsub.NackRequeue
 		case 1:
 			return pubsub.NackDiscard
 		case 2:
+			log := routing.GameLog{
+				CurrentTime: time.Now(),
+				Message: fmt.Sprintf("%s won a war against %s",w,l),
+				Username: gs.GetUsername(),
+			}
+			err := publishtoLogs(ch, log)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		case 3:
+			log := routing.GameLog{
+				CurrentTime: time.Now(),
+				Message: fmt.Sprintf("%s won a war against %s",w,l),
+				Username: gs.GetUsername(),
+			}
+			err := publishtoLogs(ch, log)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		case 4:
+			log := routing.GameLog{
+				CurrentTime: time.Now(),
+				Message: fmt.Sprintf("A war between %s and %s resulted in a draw",w,l),
+				Username: gs.GetUsername(),
+			}
+			err := publishtoLogs(ch, log)
+			if err != nil {
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		}
 		fmt.Printf("error while handling war")
 		return pubsub.NackDiscard
 	}
+}
+
+func publishtoLogs(ch *amqp.Channel, gl routing.GameLog)error{
+	err := pubsub.PublishGob(ch, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gl.Username, gl)
+	if err != nil {
+		return err
+	}
+	return nil
 }

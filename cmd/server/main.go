@@ -24,11 +24,11 @@ func main() {
 		log.Fatal("Error creating the connection channel")
 	}
 	defer ch.Close()
-	_, _, err = pubsub.DeclareAndBind(conn, "peril_topic", "game_logs", "game_logs.*",pubsub.Durable)
+	_, _, err = pubsub.DeclareAndBind(conn, "peril_topic", "game_logs", "game_logs.*", pubsub.Durable)
 	if err != nil {
 		log.Fatal(err.Error())
 	} 
-
+	pubsub.SubscribeGob(conn, routing.ExchangePerilTopic, "game_logs", "game_logs.*", pubsub.Durable, logHandler(), pubsub.GobDecoder[routing.GameLog])
 	gamelogic.PrintServerHelp()
 	loop:
 	for {
@@ -61,4 +61,16 @@ func main() {
 		}
 	}
 
+}
+
+
+func logHandler() func(routing.GameLog) pubsub.Acktype {
+	return func(gl routing.GameLog) pubsub.Acktype{
+		defer fmt.Println(">  ")
+		err := gamelogic.WriteLog(gl)
+		if err != nil {
+			return pubsub.NackRequeue
+		}	
+		return pubsub.Ack
+	}
 }
